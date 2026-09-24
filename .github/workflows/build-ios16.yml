@@ -1,0 +1,147 @@
+name: Build XeniOS for iPadOS 16.3
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 180
+    steps:
+      - name: Check out XeniOS release source
+        uses: actions/checkout@v4
+        with:
+          repository: xenios-jp/XeniOS
+          ref: 57c3ca1400ad80cd0c62995d906e00cef2a95604
+          path: upstream
+          fetch-depth: 0
+
+      - name: Apply iPadOS 16.3 compatibility patch
+        shell: bash
+        run: |
+          cat > /tmp/xenios-ios16.patch <<'XENIOS_IOS16_PATCH'
+          diff --git a/CMakeLists.txt b/CMakeLists.txt
+          index 089b4c90c..c31182dcf 100644
+          --- a/CMakeLists.txt
+          +++ b/CMakeLists.txt
+          @@ -17,7 +17,7 @@ endif()
+           # Must be set before project() so the toolchain bakes the deployment target into
+           # every compile/link; setting it later only updates the variable.
+           if(XE_PLATFORM_IOS)
+          -  set(CMAKE_OSX_DEPLOYMENT_TARGET "18.0" CACHE STRING "Minimum iOS version")
+          +  set(CMAKE_OSX_DEPLOYMENT_TARGET "16.3" CACHE STRING "Minimum iOS version")
+           elseif(XE_PLATFORM_MACOS)
+             set(CMAKE_OSX_DEPLOYMENT_TARGET "15.0" CACHE STRING "Minimum macOS version")
+           endif()
+          diff --git a/src/xenia/base/logging.cc b/src/xenia/base/logging.cc
+          index 38106599e..cc2504620 100644
+          --- a/src/xenia/base/logging.cc
+          +++ b/src/xenia/base/logging.cc
+          @@ -545,6 +545,10 @@ void FatalError(const std::string_view str) {
+           #if XE_PLATFORM_ANDROID
+             // Throw an error that can be reported to the developers via the store.
+             std::abort();
+          +#elif XE_PLATFORM_IOS
+          +  // quick_exit is not exported by libSystem on iOS 16.3. Avoid a dyld abort
+          +  // before main() by using the already-supported immediate exit instead.
+          +  std::_Exit(EXIT_FAILURE);
+           #else
+             // skip static destructors so they can't race with worker threads still
+             // running and corrupt the heap, at_quick_exit handlers will take care
+          diff --git a/tools/build_apple_release.sh b/tools/build_apple_release.sh
+          index b7c899ec9..4964318bd 100755
+          --- a/tools/build_apple_release.sh
+          +++ b/tools/build_apple_release.sh
+          @@ -30,7 +30,7 @@ Options:
+                                  random com.xenios.<id> otherwise)
+             --random-ios-bundle-id
+                                  Force a random iOS bundle identifier for this package
+          -  --ios-min VERSION    iOS minimum version (default: 18.0)
+          +  --ios-min VERSION    iOS minimum version (default: 16.3)
+             --macos-min VERSION  macOS minimum version (default: 15.0)
+             --mac-sign IDENTITY  macOS codesign identity (default: ad-hoc '-')
+             --attestation-key-id ID
+          @@ -804,7 +804,7 @@ release_stage="${XENIOS_BUILD_STAGE:-}"
+           issued_at_override="${XENIOS_BUILD_ISSUED_AT:-}"
+           stamp_bundle=""
+           stamp_platform=""
+          -ios_min="18.0"
+          +ios_min="16.3"
+           macos_min="15.0"
+           mac_sign_identity="-"
+           attestation_key="${XENIOS_BUILD_ATTESTATION_KEY:-}"
+          diff --git a/xenia_ios.entitlements b/xenia_ios.entitlements
+          index 619f11c74..e767d5cf8 100644
+          --- a/xenia_ios.entitlements
+          +++ b/xenia_ios.entitlements
+          @@ -2,6 +2,8 @@
+           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+           <plist version="1.0">
+           <dict>
+          +  <key>get-task-allow</key>
+          +  <true/>
+             <key>com.apple.developer.kernel.increased-memory-limit</key>
+             <true/>
+             <key>com.apple.security.files.user-selected.read-write</key>
+          XENIOS_IOS16_PATCH
+          cd upstream
+          git apply --check /tmp/xenios-ios16.patch
+          git apply /tmp/xenios-ios16.patch
+
+      - name: Set up Apple build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd upstream
+          sudo xcode-select -s /Applications/Xcode_26.3.app
+          brew install ninja
+          retry() {
+            local attempts=0
+            until "$@"; do
+              attempts=$((attempts + 1))
+              if [ "$attempts" -ge 5 ]; then return 1; fi
+              sleep 5
+            done
+          }
+          retry git submodule update --init --depth=1 --recursive -j"$(sysctl -n hw.ncpu)"
+          retry git -C third_party/DirectXShaderCompiler submodule update --init --depth=1 external/SPIRV-Headers external/SPIRV-Tools
+          ./xenia-build.py fetchdata
+
+      - name: Build TrollStore IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd upstream
+          ./tools/build_apple_release.sh \
+            --channel preview --stage beta \
+            --version 2.0.1 --build-number 9731 \
+            --ios-min 16.3 --ios-bundle-id com.xenios.jp \
+            --skip-macos-arm64 --skip-macos-x86_64 --skip-macos-universal
+
+      - name: Verify iOS 16 and TrollStore JIT metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd upstream
+          app=build-ios-xcode/bin/iOS/Release/XeniOS.app
+          test -d "$app"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$app/Info.plist")" = 16.3
+          test "$(/usr/libexec/PlistBuddy -c 'Print :get-task-allow' scratch/artifacts/XeniOS.signed-entitlements.plist)" = true
+          test -f scratch/artifacts/xenios_ios_iphone_ipad.ipa
+          if nm -u "$app/XeniOS" | grep -Eq '(^|[[:space:]])_quick_exit($|[[:space:]])'; then
+            echo 'quick_exit is still imported from iOS 18 libSystem' >&2
+            exit 1
+          fi
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: XeniOS-iPadOS-16.3-TrollStore
+          path: upstream/scratch/artifacts/xenios_ios_iphone_ipad.ipa
+          if-no-files-found: error
+          retention-days: 7
