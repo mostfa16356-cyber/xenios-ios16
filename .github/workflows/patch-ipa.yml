@@ -1,0 +1,46 @@
+name: Patch XeniOS IPA for iPadOS 16 libc++
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  patch:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch and sign tested source build
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo xcode-select -s /Applications/Xcode_26.3.app
+          base_url='https://github.com/mostfa16356-cyber/xenios-ios16/releases/download/ios16.3-test-1/XeniOS-iPadOS-16.3-TrollStore.ipa'
+          curl --fail --location --retry 3 "$base_url" -o /tmp/xenios-base.ipa
+          echo 'b0935501a9324a87734b6a28f2dcfca05e6fb66769a3c5e80b3204c12e3f209a  /tmp/xenios-base.ipa' | shasum -a 256 -c -
+          mkdir -p /tmp/xenios-patched
+          ditto -x -k /tmp/xenios-base.ipa /tmp/xenios-patched
+          app='/tmp/xenios-patched/Payload/XeniOS.app'
+          /usr/libexec/PlistBuddy -c 'Set :CFBundleVersion 9732' "$app/Info.plist"
+          bash compat/install-ios16-runtime.sh \
+            "$app" "$PWD/entitlements/xenia_ios.entitlements" \
+            "$PWD/compat/libcxx_ios16_compat.cc"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$app/Info.plist")" = 16.3
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Info.plist")" = 9732
+          codesign -d --entitlements :- "$app" > /tmp/xenios-entitlements.plist 2>/dev/null
+          test "$(/usr/libexec/PlistBuddy -c 'Print :get-task-allow' /tmp/xenios-entitlements.plist)" = true
+          codesign --verify --deep --strict "$app"
+          (cd /tmp/xenios-patched && ditto -c -k --sequesterRsrc --keepParent Payload \
+            "$GITHUB_WORKSPACE/XeniOS-iPadOS-16.3-TrollStore-fix2.ipa")
+          shasum -a 256 "$GITHUB_WORKSPACE/XeniOS-iPadOS-16.3-TrollStore-fix2.ipa"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: XeniOS-iPadOS-16.3-TrollStore-fix2
+          path: XeniOS-iPadOS-16.3-TrollStore-fix2.ipa
+          if-no-files-found: error
+          retention-days: 7

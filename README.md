@@ -15,8 +15,10 @@ Build 9731 still stopped in dyld before app startup on the target iPad. Comparin
 its Mach-O bindings against the iOS 16.2 SDK found ten strong imports in the main
 app and one in the bundled Metal converter that the older libc++ does not export.
 Build 9732 adds `compat/libcxx_ios16_compat.cc`, a small library that reexports
-the device libc++ and supplies those missing ABI functions. The workflow changes
-the two affected Mach-O images to link through it and signs the resulting IPA.
+the device libc++ and supplies those missing ABI functions. The fast patch
+workflow takes the verified build 9731 IPA, changes the two affected Mach-O
+images to link through that library, and signs the resulting IPA. The full
+source build remains available as a manual workflow.
 
 This remains experimental. The [XeniOS FAQ](https://xenios.jp/faq) lists iOS 18
 on A16 class hardware as its lowest tested baseline. Runtime and game performance
