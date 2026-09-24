@@ -111,7 +111,7 @@ std::to_chars_result Convert(char* first, char* last, T value,
 namespace std {
 inline namespace __1 {
 
-[[noreturn]] void __libcpp_verbose_abort(const char* format, ...) {
+[[noreturn]] void __libcpp_verbose_abort(const char* format, ...) noexcept {
   va_list args;
   va_start(args, format);
   std::vfprintf(stderr, format, args);
