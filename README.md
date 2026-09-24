@@ -20,6 +20,12 @@ workflow takes the verified build 9731 IPA, changes the two affected Mach-O
 images to link through that library, and signs the resulting IPA. The full
 source build remains available as a manual workflow.
 
+On the target iPad, build 9732 opens and TrollStore enables JIT, but a game
+stops before graphics initialization. Its `xenia.log` reports that reserving
+the contiguous 4.5 GiB guest address space fails. Build 9733 adds Apple's
+`com.apple.developer.kernel.extended-virtual-addressing` entitlement to the
+TrollStore signature. This is an unverified fix until tested on the device.
+
 This remains experimental. The [XeniOS FAQ](https://xenios.jp/faq) lists iOS 18
 on A16 class hardware as its lowest tested baseline. Runtime and game performance
 on the ninth generation iPad have not been validated.

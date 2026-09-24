@@ -25,22 +25,23 @@ jobs:
           mkdir -p /tmp/xenios-patched
           ditto -x -k /tmp/xenios-base.ipa /tmp/xenios-patched
           app='/tmp/xenios-patched/Payload/XeniOS.app'
-          /usr/libexec/PlistBuddy -c 'Set :CFBundleVersion 9732' "$app/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Set :CFBundleVersion 9733' "$app/Info.plist"
           bash compat/install-ios16-runtime.sh \
             "$app" "$PWD/entitlements/xenia_ios.entitlements" \
             "$PWD/compat/libcxx_ios16_compat.cc"
           test "$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$app/Info.plist")" = 16.3
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Info.plist")" = 9732
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Info.plist")" = 9733
           codesign -d --entitlements :- "$app" > /tmp/xenios-entitlements.plist 2>/dev/null
           test "$(/usr/libexec/PlistBuddy -c 'Print :get-task-allow' /tmp/xenios-entitlements.plist)" = true
+          test "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.developer.kernel.extended-virtual-addressing' /tmp/xenios-entitlements.plist)" = true
           codesign --verify --deep --strict "$app"
           (cd /tmp/xenios-patched && ditto -c -k --sequesterRsrc --keepParent Payload \
-            "$GITHUB_WORKSPACE/XeniOS-iPadOS-16.3-TrollStore-fix2.ipa")
-          shasum -a 256 "$GITHUB_WORKSPACE/XeniOS-iPadOS-16.3-TrollStore-fix2.ipa"
+            "$GITHUB_WORKSPACE/XeniOS-iPadOS-16.3-TrollStore-fix3.ipa")
+          shasum -a 256 "$GITHUB_WORKSPACE/XeniOS-iPadOS-16.3-TrollStore-fix3.ipa"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: XeniOS-iPadOS-16.3-TrollStore-fix2
-          path: XeniOS-iPadOS-16.3-TrollStore-fix2.ipa
+          name: XeniOS-iPadOS-16.3-TrollStore-fix3
+          path: XeniOS-iPadOS-16.3-TrollStore-fix3.ipa
           if-no-files-found: error
           retention-days: 7

@@ -82,7 +82,7 @@ jobs:
           index 619f11c74..e767d5cf8 100644
           --- a/xenia_ios.entitlements
           +++ b/xenia_ios.entitlements
-          @@ -2,6 +2,8 @@
+          @@ -2,6 +2,10 @@
            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
            <plist version="1.0">
            <dict>
@@ -90,6 +90,8 @@ jobs:
           +  <true/>
              <key>com.apple.developer.kernel.increased-memory-limit</key>
              <true/>
+          +  <key>com.apple.developer.kernel.extended-virtual-addressing</key>
+          +  <true/>
              <key>com.apple.security.files.user-selected.read-write</key>
           XENIOS_IOS16_PATCH
           cd upstream
@@ -122,7 +124,7 @@ jobs:
           cd upstream
           ./tools/build_apple_release.sh \
             --channel preview --stage beta \
-            --version 2.0.1 --build-number 9732 \
+            --version 2.0.1 --build-number 9733 \
             --ios-min 16.3 --ios-bundle-id com.xenios.jp \
             --skip-macos-arm64 --skip-macos-x86_64 --skip-macos-universal
 
@@ -150,6 +152,7 @@ jobs:
           test -d "$app"
           test "$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$app/Info.plist")" = 16.3
           test "$(/usr/libexec/PlistBuddy -c 'Print :get-task-allow' scratch/artifacts/XeniOS.signed-entitlements.plist)" = true
+          test "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.developer.kernel.extended-virtual-addressing' scratch/artifacts/XeniOS.signed-entitlements.plist)" = true
           test -f scratch/artifacts/xenios_ios_iphone_ipad.ipa
           test -f "$app/Frameworks/libc.dylib"
           otool -L "$app/XeniOS" | grep -F '@rpath/libc.dylib'

@@ -52,7 +52,7 @@ diff --git a/xenia_ios.entitlements b/xenia_ios.entitlements
 index 619f11c74..e767d5cf8 100644
 --- a/xenia_ios.entitlements
 +++ b/xenia_ios.entitlements
-@@ -2,6 +2,8 @@
+@@ -2,6 +2,10 @@
  <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
  <plist version="1.0">
  <dict>
@@ -60,4 +60,6 @@ index 619f11c74..e767d5cf8 100644
 +  <true/>
    <key>com.apple.developer.kernel.increased-memory-limit</key>
    <true/>
++  <key>com.apple.developer.kernel.extended-virtual-addressing</key>
++  <true/>
    <key>com.apple.security.files.user-selected.read-write</key>
