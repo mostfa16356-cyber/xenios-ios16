@@ -1,0 +1,35 @@
+name: Test iPad 9 memory request
+on:
+  push:
+    branches: [main]
+    paths:
+      - compat/ipad9_memory*
+      - tests/ipad9-memory-plan.cc
+      - .github/workflows/test-ipad9-memory.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate policy and build iOS 16 memory helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo xcode-select -s /Applications/Xcode_26.3.app
+          clang++ -std=c++17 tests/ipad9-memory-plan.cc -o /tmp/ipad9-memory-plan-test
+          /tmp/ipad9-memory-plan-test
+          sdk="$(xcrun --sdk iphoneos --show-sdk-path)"
+          xcrun --sdk iphoneos clang++ -std=c++17 -O2 -fPIC -dynamiclib \
+            -arch arm64 -miphoneos-version-min=16.3 -isysroot "$sdk" \
+            -Wl,-install_name,@rpath/libc.dylib \
+            -Xlinker -reexport_library -Xlinker "$sdk/usr/lib/libc++.tbd" \
+            compat/libcxx_ios16_compat.cc compat/ipad9_memory_limit.cc \
+            -o /tmp/ipad9-runtime.dylib
+          codesign --force --sign - /tmp/ipad9-runtime.dylib
+          codesign --verify --strict /tmp/ipad9-runtime.dylib
+          strings /tmp/ipad9-runtime.dylib | grep -F 'ipad9-memory-status.txt'
+          strings /tmp/ipad9-runtime.dylib | grep -F 'memorystatus_control'
