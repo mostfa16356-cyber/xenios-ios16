@@ -12,18 +12,19 @@ index 089b4c90c..c31182dcf 100644
    set(CMAKE_OSX_DEPLOYMENT_TARGET "15.0" CACHE STRING "Minimum macOS version")
  endif()
 diff --git a/src/xenia/app/xenia_main_ios.mm b/src/xenia/app/xenia_main_ios.mm
-index f5b7ec064..d4895641b 100644
+index f5b7ec064..e7c549678 100644
 --- a/src/xenia/app/xenia_main_ios.mm
 +++ b/src/xenia/app/xenia_main_ios.mm
-@@ -29,6 +29,7 @@
+@@ -29,6 +29,8 @@
  #include "xenia/base/cvar.h"
  #include "xenia/base/filesystem.h"
  #include "xenia/base/logging.h"
 +#include "xenia/base/ipad9_resource_budget.h"
++#include "xenia/base/ipad9_cvar_override.h"
  #include "xenia/base/string.h"
  #include "xenia/base/threading.h"
  #include "xenia/config.h"
-@@ -65,6 +66,15 @@
+@@ -65,6 +67,15 @@
  #include "xenia/patcher/patch_db.h"
  
  DECLARE_bool(present_letterbox);
@@ -39,7 +40,7 @@ index f5b7ec064..d4895641b 100644
  
  // CVars normally defined in xenia_main.cc (excluded on iOS).
  DEFINE_path(storage_root, "",
-@@ -81,6 +91,35 @@ DEFINE_path(cache_root, "",
+@@ -81,6 +92,35 @@ DEFINE_path(cache_root, "",
              "Storage");
  DEFINE_string(apu, "sdl", "Audio system. Use: [sdl, nop]", "APU");
  DEFINE_string(gpu, "metal", "Graphics system. Use: [metal, vulkan]", "GPU");
@@ -51,21 +52,21 @@ index f5b7ec064..d4895641b 100644
 +    return;
 +  }
 +#if defined(XE_IOS_MOLTENVK_ENABLED)
-+  OVERRIDE_string(gpu, "vulkan");
-+  OVERRIDE_int32(vulkan_pipeline_creation_threads, 1);
++  xe::SetIPad9GameOverride<std::string>("gpu", "vulkan");
++  xe::SetIPad9GameOverride<int32_t>("vulkan_pipeline_creation_threads", 1);
 +#endif
-+  OVERRIDE_string(render_target_path, "performance");
-+  OVERRIDE_int32(draw_resolution_scale_x, 1);
-+  OVERRIDE_int32(draw_resolution_scale_y, 1);
-+  OVERRIDE_uint32(internal_display_resolution, 0);
-+  OVERRIDE_int32(anisotropic_override, 0);
-+  OVERRIDE_uint32(framerate_limit, 30);
-+  OVERRIDE_bool(guest_display_refresh_cap, true);
-+  OVERRIDE_uint32(texture_cache_memory_limit_soft,
++  xe::SetIPad9GameOverride<std::string>("render_target_path", "performance");
++  xe::SetIPad9GameOverride<int32_t>("draw_resolution_scale_x", 1);
++  xe::SetIPad9GameOverride<int32_t>("draw_resolution_scale_y", 1);
++  xe::SetIPad9GameOverride<uint32_t>("internal_display_resolution", 0);
++  xe::SetIPad9GameOverride<int32_t>("anisotropic_override", 0);
++  xe::SetIPad9GameOverride<uint32_t>("framerate_limit", 30);
++  xe::SetIPad9GameOverride<bool>("guest_display_refresh_cap", true);
++  xe::SetIPad9GameOverride<uint32_t>("texture_cache_memory_limit_soft",
 +                 std::min(cvars::texture_cache_memory_limit_soft, uint32_t(96)));
-+  OVERRIDE_uint32(texture_cache_memory_limit_hard,
++  xe::SetIPad9GameOverride<uint32_t>("texture_cache_memory_limit_hard",
 +                 std::min(cvars::texture_cache_memory_limit_hard, uint32_t(192)));
-+  OVERRIDE_uint32(texture_cache_memory_limit_soft_lifetime,
++  xe::SetIPad9GameOverride<uint32_t>("texture_cache_memory_limit_soft_lifetime",
 +                 std::min(cvars::texture_cache_memory_limit_soft_lifetime,
 +                          uint32_t(2)));
 +  XELOGW("iPad9 resource profile active: Vulkan, 1x, guest display request "
@@ -75,7 +76,7 @@ index f5b7ec064..d4895641b 100644
  DEFINE_bool(mount_scratch, false, "Enable scratch mount", "Storage");
  DEFINE_bool(mount_cache, true, "Enable cache mount", "Storage");
  DEFINE_bool(mount_memory_unit, false, "Enable memory unit (MU) mount", "Storage");
-@@ -606,6 +645,7 @@ bool EmulatorAppIOS::OnInitialize() {
+@@ -606,6 +646,7 @@ bool EmulatorAppIOS::OnInitialize() {
    XELOGI("iOS: Storage root: {}", storage_root);
  
    config::SetupConfig(storage_root);
@@ -83,7 +84,7 @@ index f5b7ec064..d4895641b 100644
  
    std::filesystem::path content_root = cvars::content_root;
    if (content_root.empty()) {
-@@ -1328,6 +1368,7 @@ void EmulatorAppIOS::EmulatorThread(const std::filesystem::path& game_path,
+@@ -1328,6 +1369,7 @@ void EmulatorAppIOS::EmulatorThread(const std::filesystem::path& game_path,
    if (launched_with_game) {
      XELOGI("iOS: Loading game config for: {}", game_path.string());
      config::LoadGameConfigForFile(game_path);
@@ -91,7 +92,7 @@ index f5b7ec064..d4895641b 100644
      app_context().CallInUIThread([this]() {
        ApplyGuestDisplayRefreshCapToWindowFromUIThread(cvars::guest_display_refresh_cap);
      });
-@@ -1537,6 +1578,7 @@ std::unique_ptr<apu::AudioSystem> EmulatorAppIOS::CreateAudioSystem(cpu::Process
+@@ -1537,6 +1579,7 @@ std::unique_ptr<apu::AudioSystem> EmulatorAppIOS::CreateAudioSystem(cpu::Process
  }
  
  std::unique_ptr<gpu::GraphicsSystem> EmulatorAppIOS::CreateGraphicsSystem() {
@@ -99,6 +100,32 @@ index f5b7ec064..d4895641b 100644
    const std::string gpu_implementation_name = cvars::gpu;
  #if defined(XE_IOS_MOLTENVK_ENABLED)
    if (gpu_implementation_name == "vulkan") {
+diff --git a/src/xenia/base/ipad9_cvar_override.h b/src/xenia/base/ipad9_cvar_override.h
+new file mode 100644
+index 000000000..dfc5e5f39
+--- /dev/null
++++ b/src/xenia/base/ipad9_cvar_override.h
+@@ -0,0 +1,20 @@
++#ifndef XENIA_BASE_IPAD9_CVAR_OVERRIDE_H_
++#define XENIA_BASE_IPAD9_CVAR_OVERRIDE_H_
++#include <utility>
++#include "xenia/base/cvar.h"
++
++namespace xe {
++// DEFINE_* keeps cv:: handles local to the defining translation unit. Look
++// up the registered config object when overriding flags defined elsewhere.
++template <typename T>
++bool SetIPad9GameOverride(const char* name, T value) {
++  if (!cvar::ConfigVars) return false;
++  auto found = cvar::ConfigVars->find(name);
++  if (found == cvar::ConfigVars->end()) return false;
++  auto* variable = dynamic_cast<cvar::ConfigVar<T>*>(found->second);
++  if (!variable) return false;
++  variable->SetGameConfigValue(std::move(value));
++  return true;
++}
++}  // namespace xe
++#endif
 diff --git a/src/xenia/base/ipad9_resource_budget.h b/src/xenia/base/ipad9_resource_budget.h
 new file mode 100644
 index 000000000..bce605a6e

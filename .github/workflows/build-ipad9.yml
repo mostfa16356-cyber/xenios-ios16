@@ -52,6 +52,12 @@ jobs:
           retry git -C third_party/DirectXShaderCompiler submodule update --init --depth=1 external/SPIRV-Headers external/SPIRV-Tools
           ./xenia-build.py fetchdata
 
+      - name: Verify actual profile config API before full compilation
+        shell: bash
+        run: |
+          cd upstream
+          python3 ../builder/tests/validate-ipad9-profile.py
+
       - name: Build TrollStore IPA
         shell: bash
         run: |
