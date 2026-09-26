@@ -1,0 +1,60 @@
+name: Package iPad 9 memory request
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: Successful build-ipad9.yml run ID
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  package:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.source_run_id }}
+          name: XeniOS-iPad9-iPadOS-16.3-fix4
+          path: base-ipa
+      - name: Test memory request policy and sign final IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo xcode-select -s /Applications/Xcode_26.3.app
+          clang++ -std=c++17 tests/ipad9-memory-plan.cc -o /tmp/ipad9-memory-plan-test
+          /tmp/ipad9-memory-plan-test
+          base_ipa="$(find "$PWD/base-ipa" -type f -name '*.ipa' -print -quit)"
+          test -n "$base_ipa"
+          mkdir -p /tmp/xenios-memory
+          ditto -x -k "$base_ipa" /tmp/xenios-memory
+          app=/tmp/xenios-memory/Payload/XeniOS.app
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Info.plist")" = 9734
+          bash compat/install-ios16-runtime.sh "$app" \
+            "$PWD/entitlements/xenia_ipad9.entitlements" \
+            "$PWD/compat/libcxx_ios16_compat.cc" \
+            "$PWD/compat/ipad9_memory_limit.cc"
+          codesign -d --entitlements :- "$app" > /tmp/ipad9-signed-entitlements.plist 2>/dev/null
+          for key in get-task-allow com.apple.developer.kernel.increased-memory-limit \
+                     com.apple.developer.kernel.extended-virtual-addressing com.apple.private.memorystatus; do
+            test "$(/usr/libexec/PlistBuddy -c "Print :$key" /tmp/ipad9-signed-entitlements.plist)" = true
+          done
+          test "$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$app/Info.plist")" = 16.3
+          strings "$app/Frameworks/libc.dylib" | grep -F 'ipad9-memory-status.txt'
+          strings "$app/Frameworks/libc.dylib" | grep -F 'memorystatus_control'
+          codesign --verify --deep --strict "$app"
+          (cd /tmp/xenios-memory && ditto -c -k --sequesterRsrc --keepParent Payload \
+            "$GITHUB_WORKSPACE/XeniOS-iPad9-iPadOS-16.3-fix4.ipa")
+      - uses: actions/upload-artifact@v4
+        with:
+          name: XeniOS-iPad9-iPadOS-16.3-fix4
+          path: XeniOS-iPad9-iPadOS-16.3-fix4.ipa
+          if-no-files-found: error
+          retention-days: 7
