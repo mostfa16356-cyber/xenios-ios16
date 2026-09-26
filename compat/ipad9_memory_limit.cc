@@ -87,13 +87,15 @@ void ApplyMemoryRequest(void*) {
   }
   if (memstatus(kSetMemlimitProperties, own_pid, 0, &requested,
                 sizeof(requested)) != 0) {
-    WriteStatus("raise-request-rejected", errno, before, after,
+    const int request_error = errno;
+    WriteStatus("raise-request-rejected", request_error, before, after,
                 physical_bytes, headroom_before, os_proc_available_memory());
     return;
   }
   if (memstatus(kGetMemlimitProperties, own_pid, 0, &after,
                 sizeof(after)) != 0) {
-    WriteStatus("request-accepted-verification-query-failed", errno,
+    const int verification_error = errno;
+    WriteStatus("request-accepted-verification-query-failed", verification_error,
                 before, before, physical_bytes, headroom_before,
                 os_proc_available_memory());
     return;
