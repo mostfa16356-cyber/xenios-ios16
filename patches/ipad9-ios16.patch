@@ -1,0 +1,283 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 089b4c90c..c31182dcf 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -17,7 +17,7 @@ endif()
+ # Must be set before project() so the toolchain bakes the deployment target into
+ # every compile/link; setting it later only updates the variable.
+ if(XE_PLATFORM_IOS)
+-  set(CMAKE_OSX_DEPLOYMENT_TARGET "18.0" CACHE STRING "Minimum iOS version")
++  set(CMAKE_OSX_DEPLOYMENT_TARGET "16.3" CACHE STRING "Minimum iOS version")
+ elseif(XE_PLATFORM_MACOS)
+   set(CMAKE_OSX_DEPLOYMENT_TARGET "15.0" CACHE STRING "Minimum macOS version")
+ endif()
+diff --git a/src/xenia/app/xenia_main_ios.mm b/src/xenia/app/xenia_main_ios.mm
+index f5b7ec064..d4895641b 100644
+--- a/src/xenia/app/xenia_main_ios.mm
++++ b/src/xenia/app/xenia_main_ios.mm
+@@ -29,6 +29,7 @@
+ #include "xenia/base/cvar.h"
+ #include "xenia/base/filesystem.h"
+ #include "xenia/base/logging.h"
++#include "xenia/base/ipad9_resource_budget.h"
+ #include "xenia/base/string.h"
+ #include "xenia/base/threading.h"
+ #include "xenia/config.h"
+@@ -65,6 +66,15 @@
+ #include "xenia/patcher/patch_db.h"
+ 
+ DECLARE_bool(present_letterbox);
++DECLARE_uint32(internal_display_resolution);
++DECLARE_int32(draw_resolution_scale_x);
++DECLARE_int32(draw_resolution_scale_y);
++DECLARE_uint32(texture_cache_memory_limit_soft);
++DECLARE_uint32(texture_cache_memory_limit_hard);
++DECLARE_uint32(texture_cache_memory_limit_soft_lifetime);
++#if defined(XE_IOS_MOLTENVK_ENABLED)
++DECLARE_int32(vulkan_pipeline_creation_threads);
++#endif
+ 
+ // CVars normally defined in xenia_main.cc (excluded on iOS).
+ DEFINE_path(storage_root, "",
+@@ -81,6 +91,35 @@ DEFINE_path(cache_root, "",
+             "Storage");
+ DEFINE_string(apu, "sdl", "Audio system. Use: [sdl, nop]", "APU");
+ DEFINE_string(gpu, "metal", "Graphics system. Use: [metal, vulkan]", "GPU");
++
++// Apply after loading user/per-game settings so stale settings from an older
++// installation cannot silently re-enable upscaling or the iOS 17 Metal path.
++static void ApplyIPad9ResourceProfile() {
++  if (!xe::IsIPad9ResourceDevice()) {
++    return;
++  }
++#if defined(XE_IOS_MOLTENVK_ENABLED)
++  OVERRIDE_string(gpu, "vulkan");
++  OVERRIDE_int32(vulkan_pipeline_creation_threads, 1);
++#endif
++  OVERRIDE_string(render_target_path, "performance");
++  OVERRIDE_int32(draw_resolution_scale_x, 1);
++  OVERRIDE_int32(draw_resolution_scale_y, 1);
++  OVERRIDE_uint32(internal_display_resolution, 0);
++  OVERRIDE_int32(anisotropic_override, 0);
++  OVERRIDE_uint32(framerate_limit, 30);
++  OVERRIDE_bool(guest_display_refresh_cap, true);
++  OVERRIDE_uint32(texture_cache_memory_limit_soft,
++                 std::min(cvars::texture_cache_memory_limit_soft, uint32_t(96)));
++  OVERRIDE_uint32(texture_cache_memory_limit_hard,
++                 std::min(cvars::texture_cache_memory_limit_hard, uint32_t(192)));
++  OVERRIDE_uint32(texture_cache_memory_limit_soft_lifetime,
++                 std::min(cvars::texture_cache_memory_limit_soft_lifetime,
++                          uint32_t(2)));
++  XELOGW("iPad9 resource profile active: Vulkan, 1x, guest display request "
++         "640x480, host 30 FPS, one compilation worker. "
++         "Game-fixed resolutions and required guest/JIT allocations remain.");
++}
+ DEFINE_bool(mount_scratch, false, "Enable scratch mount", "Storage");
+ DEFINE_bool(mount_cache, true, "Enable cache mount", "Storage");
+ DEFINE_bool(mount_memory_unit, false, "Enable memory unit (MU) mount", "Storage");
+@@ -606,6 +645,7 @@ bool EmulatorAppIOS::OnInitialize() {
+   XELOGI("iOS: Storage root: {}", storage_root);
+ 
+   config::SetupConfig(storage_root);
++  ApplyIPad9ResourceProfile();
+ 
+   std::filesystem::path content_root = cvars::content_root;
+   if (content_root.empty()) {
+@@ -1328,6 +1368,7 @@ void EmulatorAppIOS::EmulatorThread(const std::filesystem::path& game_path,
+   if (launched_with_game) {
+     XELOGI("iOS: Loading game config for: {}", game_path.string());
+     config::LoadGameConfigForFile(game_path);
++    ApplyIPad9ResourceProfile();
+     app_context().CallInUIThread([this]() {
+       ApplyGuestDisplayRefreshCapToWindowFromUIThread(cvars::guest_display_refresh_cap);
+     });
+@@ -1537,6 +1578,7 @@ std::unique_ptr<apu::AudioSystem> EmulatorAppIOS::CreateAudioSystem(cpu::Process
+ }
+ 
+ std::unique_ptr<gpu::GraphicsSystem> EmulatorAppIOS::CreateGraphicsSystem() {
++  ApplyIPad9ResourceProfile();
+   const std::string gpu_implementation_name = cvars::gpu;
+ #if defined(XE_IOS_MOLTENVK_ENABLED)
+   if (gpu_implementation_name == "vulkan") {
+diff --git a/src/xenia/base/ipad9_resource_budget.h b/src/xenia/base/ipad9_resource_budget.h
+new file mode 100644
+index 000000000..bce605a6e
+--- /dev/null
++++ b/src/xenia/base/ipad9_resource_budget.h
+@@ -0,0 +1,60 @@
++#ifndef XENIA_BASE_IPAD9_RESOURCE_BUDGET_H_
++#define XENIA_BASE_IPAD9_RESOURCE_BUDGET_H_
++
++#include <algorithm>
++#include <cstddef>
++#include <cstdint>
++#include <cstring>
++
++#include "xenia/base/platform.h"
++#if XE_PLATFORM_IOS
++#include <sys/sysctl.h>
++#endif
++
++namespace xe {
++inline bool IsIPad9ResourceDevice() {
++#if XE_PLATFORM_IOS
++  static const bool matched = [] {
++    char model[64] = {};
++    size_t length = sizeof(model);
++    if (sysctlbyname("hw.machine", model, &length, nullptr, 0) != 0) {
++      return false;
++    }
++    return std::strcmp(model, "iPad12,1") == 0 ||
++           std::strcmp(model, "iPad12,2") == 0;
++  }();
++  return matched;
++#else
++  return false;
++#endif
++}
++
++struct IPad9TextureBudget {
++  uint32_t soft_mb;
++  uint32_t hard_mb;
++  uint32_t unused_seconds;
++  uint32_t pressure_level;
++};
++
++// Advisory cache eviction policy, not an allocation cap. Never destroy a
++// texture still used by an unfinished GPU submission. All values are host
++// texture cache budgets, separate from Xbox 360 guest memory and JIT memory.
++inline IPad9TextureBudget GetIPad9TextureBudget(
++    size_t available_bytes, uint32_t requested_soft_mb,
++    uint32_t requested_hard_mb, uint32_t requested_unused_seconds) {
++  constexpr size_t kMiB = size_t(1) << 20;
++  IPad9TextureBudget budget{96, 192, 2, 0};
++  if (available_bytes < 256 * kMiB) {
++    budget = {24, 32, 0, 2};
++  } else if (available_bytes < 512 * kMiB) {
++    budget = {64, 128, 0, 1};
++  }
++  budget.hard_mb = std::min(budget.hard_mb, requested_hard_mb);
++  budget.soft_mb = std::min(
++      std::min(budget.soft_mb, requested_soft_mb), budget.hard_mb);
++  budget.unused_seconds =
++      std::min(budget.unused_seconds, requested_unused_seconds);
++  return budget;
++}
++}  // namespace xe
++#endif
+diff --git a/src/xenia/base/logging.cc b/src/xenia/base/logging.cc
+index 38106599e..cc2504620 100644
+--- a/src/xenia/base/logging.cc
++++ b/src/xenia/base/logging.cc
+@@ -545,6 +545,10 @@ void FatalError(const std::string_view str) {
+ #if XE_PLATFORM_ANDROID
+   // Throw an error that can be reported to the developers via the store.
+   std::abort();
++#elif XE_PLATFORM_IOS
++  // quick_exit is not exported by libSystem on iOS 16.3. Avoid a dyld abort
++  // before main() by using the already-supported immediate exit instead.
++  std::_Exit(EXIT_FAILURE);
+ #else
+   // skip static destructors so they can't race with worker threads still
+   // running and corrupt the heap, at_quick_exit handlers will take care
+diff --git a/src/xenia/gpu/texture_cache.cc b/src/xenia/gpu/texture_cache.cc
+index a1a80c923..24ec28f34 100644
+--- a/src/xenia/gpu/texture_cache.cc
++++ b/src/xenia/gpu/texture_cache.cc
+@@ -10,6 +10,10 @@
+ #include "xenia/gpu/texture_cache.h"
+ 
+ #include "xenia/base/clock.h"
++#include "xenia/base/ipad9_resource_budget.h"
++#if XE_PLATFORM_IOS
++#include <os/proc.h>
++#endif
+ #include "xenia/base/cvar.h"
+ #include "xenia/base/logging.h"
+ #include "xenia/base/math.h"
+@@ -213,6 +217,28 @@ void TextureCache::CompletedSubmissionUpdated(
+       cvars::texture_cache_memory_limit_hard + limit_scaled_resolve_add_mb;
+   uint32_t limit_soft_lifetime =
+       cvars::texture_cache_memory_limit_soft_lifetime * 1000;
++#if XE_PLATFORM_IOS
++  if (xe::IsIPad9ResourceDevice()) {
++    // Query the current app headroom rather than assuming that all 3 GB of
++    // physical RAM is available. Existing GPU completion checks below remain
++    // mandatory even under memory pressure.
++    const size_t available = os_proc_available_memory();
++    const auto budget = xe::GetIPad9TextureBudget(
++        available, limit_soft_mb, limit_hard_mb,
++        cvars::texture_cache_memory_limit_soft_lifetime);
++    limit_soft_mb = budget.soft_mb;
++    limit_hard_mb = budget.hard_mb;
++    limit_soft_lifetime = budget.unused_seconds * 1000;
++    static thread_local uint32_t previous_pressure = UINT32_MAX;
++    if (budget.pressure_level != previous_pressure) {
++      previous_pressure = budget.pressure_level;
++      XELOGW("iPad9 memory policy: headroom={} MiB, texture budgets={}/{} MiB, "
++             "unused lifetime={} s (advisory, not total RAM cap)",
++             available >> 20, limit_soft_mb, limit_hard_mb,
++             budget.unused_seconds);
++    }
++  }
++#endif
+   bool destroyed_any = false;
+   while (texture_used_first_ != nullptr) {
+     uint64_t total_host_memory_usage_mb =
+diff --git a/src/xenia/gpu/vulkan/vulkan_command_processor.h b/src/xenia/gpu/vulkan/vulkan_command_processor.h
+index 8e087362b..ff428c4ba 100644
+--- a/src/xenia/gpu/vulkan/vulkan_command_processor.h
++++ b/src/xenia/gpu/vulkan/vulkan_command_processor.h
+@@ -587,7 +587,13 @@ class VulkanCommandProcessor final : public CommandProcessor {
+   std::deque<std::pair<uint64_t, VkSemaphore>>
+       submissions_in_flight_semaphores_;
+ 
++  // This iOS package targets devices with limited shared CPU/GPU RAM.
++  // Keep a single guest frame in flight to shorten transient resource life.
++#if XE_PLATFORM_IOS
++  static constexpr uint32_t kMaxFramesInFlight = 1;
++#else
+   static constexpr uint32_t kMaxFramesInFlight = 3;
++#endif
+   bool frame_open_ = false;
+   // Guest frame index, since some transient resources can be reused across
+   // submissions. Values updated in the beginning of a frame.
+diff --git a/tools/build_apple_release.sh b/tools/build_apple_release.sh
+index b7c899ec9..4964318bd 100755
+--- a/tools/build_apple_release.sh
++++ b/tools/build_apple_release.sh
+@@ -30,7 +30,7 @@ Options:
+                        random com.xenios.<id> otherwise)
+   --random-ios-bundle-id
+                        Force a random iOS bundle identifier for this package
+-  --ios-min VERSION    iOS minimum version (default: 18.0)
++  --ios-min VERSION    iOS minimum version (default: 16.3)
+   --macos-min VERSION  macOS minimum version (default: 15.0)
+   --mac-sign IDENTITY  macOS codesign identity (default: ad-hoc '-')
+   --attestation-key-id ID
+@@ -804,7 +804,7 @@ release_stage="${XENIOS_BUILD_STAGE:-}"
+ issued_at_override="${XENIOS_BUILD_ISSUED_AT:-}"
+ stamp_bundle=""
+ stamp_platform=""
+-ios_min="18.0"
++ios_min="16.3"
+ macos_min="15.0"
+ mac_sign_identity="-"
+ attestation_key="${XENIOS_BUILD_ATTESTATION_KEY:-}"
+diff --git a/xenia_ios.entitlements b/xenia_ios.entitlements
+index 619f11c74..51572981b 100644
+--- a/xenia_ios.entitlements
++++ b/xenia_ios.entitlements
+@@ -2,8 +2,12 @@
+ <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+ <plist version="1.0">
+ <dict>
++  <key>get-task-allow</key>
++  <true/>
+   <key>com.apple.developer.kernel.increased-memory-limit</key>
+   <true/>
++    <key>com.apple.developer.kernel.extended-virtual-addressing</key>
++    <true/>
+   <key>com.apple.security.files.user-selected.read-write</key>
+   <true/>
+ </dict>

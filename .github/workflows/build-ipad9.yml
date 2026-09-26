@@ -1,0 +1,106 @@
+name: Build XeniOS for iPad 9 and iPadOS 16.3
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 180
+    steps:
+      - name: Check out compatibility build files
+        uses: actions/checkout@v4
+        with:
+          path: builder
+
+      - name: Check out XeniOS release source
+        uses: actions/checkout@v4
+        with:
+          repository: xenios-jp/XeniOS
+          ref: 57c3ca1400ad80cd0c62995d906e00cef2a95604
+          path: upstream
+          fetch-depth: 0
+
+      - name: Apply iPad 9 resource and iOS 16 compatibility patch
+        shell: bash
+        run: |
+          cd upstream
+          git apply --check ../builder/patches/ipad9-ios16.patch
+          git apply ../builder/patches/ipad9-ios16.patch
+          clang++ -std=c++17 -I src ../builder/tests/ipad9-resource-budget.cc -o /tmp/ipad9-policy-test
+          /tmp/ipad9-policy-test
+
+      - name: Set up Apple build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd upstream
+          sudo xcode-select -s /Applications/Xcode_26.3.app
+          brew install ninja
+          retry() {
+            local attempts=0
+            until "$@"; do
+              attempts=$((attempts + 1))
+              if [ "$attempts" -ge 5 ]; then return 1; fi
+              sleep 5
+            done
+          }
+          retry git submodule update --init --depth=1 --recursive -j"$(sysctl -n hw.ncpu)"
+          retry git -C third_party/DirectXShaderCompiler submodule update --init --depth=1 external/SPIRV-Headers external/SPIRV-Tools
+          ./xenia-build.py fetchdata
+
+      - name: Build TrollStore IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd upstream
+          ./tools/build_apple_release.sh \
+            --channel preview --stage beta \
+            --version 2.0.1 --build-number 9734 \
+            --ios-min 16.3 --ios-bundle-id com.xenios.jp \
+            --skip-macos-arm64 --skip-macos-x86_64 --skip-macos-universal
+
+      - name: Install iPadOS 16 C++ runtime compatibility library
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="$PWD/upstream/build-ios-xcode/bin/iOS/Release/XeniOS.app"
+          entitlements="$PWD/upstream/xenia_ios.entitlements"
+          bash builder/compat/install-ios16-runtime.sh \
+            "$app" "$entitlements" "$PWD/builder/compat/libcxx_ios16_compat.cc"
+          bash upstream/tools/package_ios_ipa.sh \
+            --bundle-id com.xenios.jp \
+            "$app" "$entitlements" \
+            "$PWD/upstream/scratch/artifacts/xenios_ios_iphone_ipad.ipa" \
+            "$PWD/upstream/scratch/artifacts/XeniOS.requested-entitlements.plist" \
+            "$PWD/upstream/scratch/artifacts/XeniOS.signed-entitlements.plist"
+
+      - name: Verify iOS 16 and TrollStore JIT metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd upstream
+          app=build-ios-xcode/bin/iOS/Release/XeniOS.app
+          test -d "$app"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$app/Info.plist")" = 16.3
+          test "$(/usr/libexec/PlistBuddy -c 'Print :get-task-allow' scratch/artifacts/XeniOS.signed-entitlements.plist)" = true
+          test "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.developer.kernel.extended-virtual-addressing' scratch/artifacts/XeniOS.signed-entitlements.plist)" = true
+          test -f scratch/artifacts/xenios_ios_iphone_ipad.ipa
+          test -f "$app/Frameworks/libc.dylib"
+          otool -L "$app/XeniOS" | grep -F '@rpath/libc.dylib'
+          otool -L "$app/Frameworks/libmetalirconverter.dylib" | grep -F '@rpath/libc.dylib'
+          if nm -u "$app/XeniOS" | grep -Eq '(^|[[:space:]])_quick_exit($|[[:space:]])'; then
+            echo 'quick_exit is still imported from iOS 18 libSystem' >&2
+            exit 1
+          fi
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: XeniOS-iPad9-iPadOS-16.3-fix4
+          path: upstream/scratch/artifacts/xenios_ios_iphone_ipad.ipa
+          if-no-files-found: error
+          retention-days: 7
